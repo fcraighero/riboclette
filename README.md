@@ -102,7 +102,7 @@ Once all seed models are trained, generate the pseudolabeling dataset:
 
 ```bash
 cd /riboclette/preprocessing
-python plabeling.ipynb
+python plabeling.py
 ```
 
 #### Train Pseudolabeling-Based Models 🧠🔄
@@ -111,7 +111,7 @@ Train pseudolabeling-based model using the following command:
 
 ```bash
 cd /riboclette/models/xlnet/plabel
-python train.ipynb 
+python train.py 
 ```
 
 ---
