@@ -19,8 +19,12 @@ def _():
     from pyhere import here
     from tqdm.auto import tqdm
     import os
+    import h5py
+    from collections import defaultdict
     return (
         config,
+        defaultdict,
+        h5py,
         here,
         itertools,
         ma,
@@ -165,7 +169,7 @@ def _(itertools):
 
 @app.cell
 def _(mo):
-    mo.md(r"""Define filled motifs and their starting positions""")
+    mo.md(r"""## Define filled motifs and their starting positions""")
     return
 
 
@@ -218,30 +222,193 @@ def _(create_exp_motif, df, np):
 
 @app.cell
 def _(mo):
-    mo.md(r"""Aggregate filled motifs""")
+    mo.md(r"""## Aggregate filled motifs and compute motif significance""")
     return
 
 
 @app.cell
-def _(filled_motifs_df, id_to_codon, np):
-    sel_condition = ["LEU"]
-    agg_filled_motifs_df = (
-        filled_motifs_df.assign(freq=lambda df: df.start_pos.apply(lambda x: len(x)))
-        .groupby("condition", group_keys=False)
-        .apply(lambda x: x.nlargest(50, "freq"))
-        .assign(
-            filled_motif_codons=lambda df: df.filled_motif_codons.apply(
-                lambda x: " ".join([id_to_codon[key] for key in x])
-            )
-        )
-        .assign(
-            bincount=lambda df: df.start_pos.apply(
-                lambda x: np.bincount(np.array(x) + 10, minlength=16) / len(x)
-            )
-        )
+def _(codon_to_id, config, defaultdict, h5py, here, np):
+    def count_substring_pattern_matches(data, patterns, wildcard='[SKIP]'):
+        pattern_count = defaultdict(lambda: 0)
+
+        for pattern_str in patterns:
+            pattern = pattern_str.split()
+            pattern_len = len(pattern)
+
+            for row in data:
+                row = np.array(row).astype(int)
+
+                if len(row) < pattern_len: 
+                    # Too few positions
+                    continue
+
+                # Sliding windows for this row
+                windows = np.lib.stride_tricks.sliding_window_view(row, window_shape=pattern_len)
+
+                # Build boolean mask for matching
+                mask = np.ones(windows.shape[0], dtype=bool)
+                for i, val in enumerate(pattern):
+                    if val != wildcard:
+                        mask &= (windows[:, i] == int(codon_to_id[val]))
+
+                pattern_count[f"hit_{pattern_str}"] += np.sum(mask)
+                pattern_count[f'miss_{pattern_str}'] += windows.shape[0] - np.sum(mask)
+
+        return pattern_count
+
+    def _extract_windows(arr, indices, window_size):
+        arr_idxs = np.arange(len(arr))
+        indices = np.asarray(indices)
+        windows = []
+
+        for i in indices:
+            start = max(i - window_size, 0)
+            end = min(i + window_size + 1, len(arr))
+            windows.append(arr_idxs[start:end])
+
+        if len(windows) > 0:
+            peak_idxs = np.unique(np.concatenate(windows))
+            return arr[np.setdiff1d(arr_idxs, peak_idxs)], arr[peak_idxs]
+        else:
+            return arr, []
+
+    def extract_windows(f, window_size=10, condition = 'LEU'):
+
+        data_non_peak, data_peak = [], []
+        for idx in range(len(f['x_input'])):
+
+            if f["transcript"][idx] in config.DISCARDED_TRANSCRIPTS:
+                continue
+
+            if f['condition'][idx].decode('utf-8') != condition: continue
+
+            suffix = "ctrl" if condition == "CTRL" else "depr"
+
+            _true_rpf = np.where(f[f'y_true_{suffix}'][idx] == 999, np.nan, f[f'y_true_{suffix}'][idx])
+
+            indices = np.where(_true_rpf >= np.nanmean(_true_rpf) + np.nanstd(_true_rpf))[0]
+
+            _substring_non_peak, _substring_peak = _extract_windows(f['x_input'][idx], indices, window_size)
+
+            if len(_substring_non_peak) > 0: data_non_peak.append(_substring_non_peak)
+            if len(_substring_peak) > 0: data_peak.append(_substring_peak)
+        return data_non_peak, data_peak
+
+    def extract_windows_across_files(condition, window_size=10):
+        """Extract subsequences in genes that are or are not around peaks."""
+
+        data_non_peak, data_peak = [], []
+        for fname in config.ATTR_FNAMES:
+            with h5py.File(here("data", "results", "interpretability", fname), "r") as f:
+                non_peak, peak = extract_windows(f, window_size=window_size, condition=condition)
+                data_non_peak.extend(non_peak)
+                data_peak.extend(peak)
+        return data_non_peak, data_peak
+    return (
+        count_substring_pattern_matches,
+        extract_windows,
+        extract_windows_across_files,
     )
-    agg_filled_motifs_df = agg_filled_motifs_df.query("condition.isin(@sel_condition)")
-    return agg_filled_motifs_df, sel_condition
+
+
+@app.cell
+def _(count_substring_pattern_matches, extract_windows_across_files):
+    from scipy.stats import fisher_exact, binomtest, poisson_means_test
+    from statsmodels.stats.multitest import multipletests
+
+    def pvalue_to_stars(p):
+            if p < 0.001:
+                return 'p < 0.001'
+            elif p < 0.01:
+                return 'p < 0.01'
+            elif p < 0.05:
+                return 'p < 0.05'
+            else:
+                return 'ns'
+
+    def get_pvalue_starts(condition, patterns):
+        data_non_peak, data_peak = extract_windows_across_files(condition=condition)
+        peak_pattern_count = count_substring_pattern_matches(data_peak, patterns=patterns)
+        non_peak_pattern_count = count_substring_pattern_matches(data_non_peak, patterns=patterns)
+
+        stattest_dict = {t: [] for t in ['pvalue', 'stats', 'n_hit_peak', 'n_hit_npeak', 'n_miss_peak', 'n_miss_npeak', 'filled_motif_codons']}
+        for motif in patterns:
+            stat, pvalue = poisson_means_test(peak_pattern_count[f"hit_{motif}"], peak_pattern_count[f"miss_{motif}"]+peak_pattern_count[f"hit_{motif}"], non_peak_pattern_count[f"hit_{motif}"], non_peak_pattern_count[f"miss_{motif}"]+non_peak_pattern_count[f"hit_{motif}"])
+            stattest_dict['filled_motif_codons'].append(motif)
+            stattest_dict['pvalue'].append(pvalue)
+            stattest_dict['stats'].append(stat)
+            stattest_dict['n_hit_peak'].append(peak_pattern_count[f"hit_{motif}"])
+            stattest_dict['n_miss_peak'].append(peak_pattern_count[f"miss_{motif}"])
+            stattest_dict['n_hit_npeak'].append(non_peak_pattern_count[f"hit_{motif}"])
+            stattest_dict['n_miss_npeak'].append(non_peak_pattern_count[f"miss_{motif}"])
+
+        # Correct
+        _, pvals_corrected, _, _ = multipletests(stattest_dict['pvalue'], alpha=0.05, method='fdr_bh')
+        stattest_dict['pvalue_corrected'] = pvals_corrected
+        stattest_dict['pvalue_significance'] = [pvalue_to_stars(pc) for pc in pvals_corrected]
+
+        return stattest_dict
+    return (
+        binomtest,
+        fisher_exact,
+        get_pvalue_starts,
+        multipletests,
+        poisson_means_test,
+        pvalue_to_stars,
+    )
+
+
+@app.cell
+def _(config, filled_motifs_df, get_pvalue_starts, id_to_codon, np, pd, tqdm):
+    def _():
+        agg_filled_motifs_df = (
+            filled_motifs_df.assign(
+                freq=lambda df: df.start_pos.apply(lambda x: len(x))
+            )
+            .groupby("condition", group_keys=False)
+            .apply(lambda x: x.nlargest(50, "freq"))
+            .assign(
+                filled_motif_codons=lambda df: df.filled_motif_codons.apply(
+                    lambda x: " ".join([id_to_codon[key] for key in x])
+                )
+            )
+            .assign(
+                bincount=lambda df: df.start_pos.apply(
+                    lambda x: np.bincount(np.array(x) + 10, minlength=16) / len(x)
+                )
+            )
+        )
+
+        significance_dfs = []
+        for cond in tqdm(config.CONDITIONS_FIXNAME.keys()):
+            motif_to_stars = get_pvalue_starts(condition=cond, patterns=agg_filled_motifs_df.query(f'condition == @cond').filled_motif_codons)
+            significance_dfs.append(pd.DataFrame.from_dict(motif_to_stars).assign(condition=cond))
+        return agg_filled_motifs_df.merge(pd.concat(significance_dfs), on=['filled_motif_codons', 'condition'])
+    agg_filled_motifs_df = _()
+    return (agg_filled_motifs_df,)
+
+
+@app.cell
+def _(agg_filled_motifs_df, config, here, pd, tqdm):
+    def _():
+        with pd.ExcelWriter(here("data", "results", "plotting", 'motifs_significance.xlsx'), mode='w') as writer:
+            for cond in tqdm(config.CONDITIONS_FIXNAME.keys()):
+                df_to_save = (
+                    agg_filled_motifs_df.query('condition == @cond')
+                    .rename(
+                        columns=dict(filled_motif_codons='motif', n_hit_npeak="n_hit_not_peak", n_miss_npeak="n_miss_not_peak", stats='statistics')
+                    )[['motif', 'n_hit_peak', 'n_miss_peak', 'n_hit_not_peak', 'n_miss_not_peak', 'statistics', 'pvalue', 'pvalue_corrected']]
+                .set_index('motif')
+                .sort_values('statistics',ascending=False))
+                df_to_save.to_excel(writer, sheet_name=cond)
+    _()
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""## Generate MAAPE summary dataframe""")
+    return
 
 
 @app.cell
@@ -291,13 +458,14 @@ def _(create_exp_motif, df, np):
 def _(
     ALLOW_OVERWRITE,
     OUT_DIRPATH,
+    agg_filled_motifs_df,
     config,
-    filled_motifs_df,
     here,
     id_to_codon,
     ma,
     np,
     os,
+    pd,
     plt,
     result_df2,
     utils,
@@ -305,36 +473,20 @@ def _(
     from matplotlib.ticker import FixedLocator, FuncFormatter
 
     def make_motif_pos_heat(
-        sel_condition: list[str], topk: int, height: int, fname: str
+        agg_filled_motifs_df, height: int, fname: str
     ):
 
-        agg_filled_motifs_df = (
-            filled_motifs_df.assign(
-                freq=lambda df: df.start_pos.apply(lambda x: len(x))
-            )
-            .groupby("condition", group_keys=False)
-            .apply(lambda x: x.nlargest(topk, "freq"))
+        maape = (
+            result_df2
             .assign(
                 filled_motif_codons=lambda df: df.filled_motif_codons.apply(
                     lambda x: " ".join([id_to_codon[key] for key in x])
-                )
-            )
-            .assign(
-                bincount=lambda df: df.start_pos.apply(
-                    lambda x: np.bincount(np.array(x) + 10, minlength=16) / len(x)
-                )
-            )
-        )
-        agg_filled_motifs_df = agg_filled_motifs_df.query(
-            "condition.isin(@sel_condition)"
-        )
-
-        maape = (
-            result_df2.reset_index()
+            ))
+            .reset_index()
             .pivot(
-                index=["condition", "motif_key"], columns="start_pos", values="MAAPE"
+                index=["condition", "filled_motif_codons"], columns="start_pos", values="MAAPE"
             )
-            .iloc[agg_filled_motifs_df.index]
+            .loc[pd.MultiIndex.from_frame(agg_filled_motifs_df[['condition',"filled_motif_codons"]])]
             .fillna(0)
             .values
         )
@@ -369,6 +521,17 @@ def _(
         _h.add_left(
             ma.plotter.Labels(agg_filled_motifs_df.filled_motif_codons, align="center")
         )
+        cmap = plt.get_cmap("Greys")
+        values = np.linspace(0, 1, 4)
+        colors = [cmap(v) for v in values]
+        _h.add_right(
+            ma.plotter.Colors(
+                agg_filled_motifs_df.pvalue_significance, 
+                palette = {'p < 0.001': colors[-1], 'p < 0.01': colors[-2], 'p < 0.05': colors[-3], 'ns': colors[-4]}, 
+                label="Significance",
+                legend_kws=dict(title_fontproperties=dict(weight="normal", size=config.FSM))),
+            size=0.05, pad=0.05
+        )
         _h.group_rows(agg_filled_motifs_df.condition)
         conditions = agg_filled_motifs_df.condition.unique()
         _h.add_left(
@@ -401,12 +564,14 @@ def _(
             plt.savefig(output_fpath, dpi=600, bbox_inches="tight", pad_inches=0.0)
         plt.show()
 
-    with utils.journal_plotting_ctx():
-        make_motif_pos_heat(
-            ["CTRL", "ILE", "LEU", "VAL"], 10, 4, "motif_pos_heatmap.svg"
-        )
-        for _c in config.CONDITIONS_FIXNAME.keys():
-            make_motif_pos_heat([_c], 50, 5, f"supp_motif_pos_heatmap_{_c}.svg")
+    def _():
+        with utils.journal_plotting_ctx():
+            make_motif_pos_heat(
+                agg_filled_motifs_df.query("condition in ['CTRL', 'ILE', 'LEU', 'VAL']").groupby("condition", group_keys=False).apply(lambda x: x.nlargest(10, "freq")), 4, "motif_pos_heatmap_sign.svg"
+            )
+            for c in config.CONDITIONS_FIXNAME.keys():
+                make_motif_pos_heat(agg_filled_motifs_df.query(f"condition == @c"), 5, f"supp_motif_pos_heatmap_{c}_sign.svg")
+    _()
     return FixedLocator, FuncFormatter, make_motif_pos_heat
 
 
