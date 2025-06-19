@@ -9,19 +9,14 @@ import h5py
 import numpy as np
 import pandas as pd
 from Bio import SeqIO
-from config import (
-    ATTR_FNAMES,
-    CONDITIONS_FIXNAME,
-    ENSEMBL_FPATH,
-    GENCODE_FPATH,
-    id_to_codon,
-)
+from config import (ATTR_FNAMES, CONDITIONS_FIXNAME, ENSEMBL_FPATH,
+                    GENCODE_FPATH, id_to_codon)
 from pyhere import here
 from tqdm import tqdm, trange
 
 
 def _global_attr_plot(
-    f, num_samples, output: dict[list], ctrl: bool = True, topk: int = 5
+    f, num_samples, output: dict[list], ctrl: bool = True, topk: int = 5, on_peaks: bool = True
 ) -> list:
 
     for i in trange(num_samples):
@@ -34,9 +29,14 @@ def _global_attr_plot(
         suffix = "ctrl" if ctrl else "depr"
         true_counts = f[f"y_true_{suffix}"][i]
         true_counts = np.where(true_counts == 999, np.nan, true_counts)
-        peaks = np.nonzero(
-            true_counts >= np.nanmean(true_counts) + np.nanstd(true_counts)
-        )[0]
+        if on_peaks:
+            peaks = np.nonzero(
+                true_counts > np.nanmean(true_counts) + np.nanstd(true_counts)
+            )[0]
+        else:
+            peaks = np.nonzero(
+                true_counts < np.nanmean(true_counts) - np.nanstd(true_counts)
+            )[0]
         condition = f["condition"][i].decode("utf-8")
 
         for j in peaks:
@@ -51,25 +51,25 @@ def _global_attr_plot(
     return output
 
 
-def global_attr_plot(ctrl: bool, test=False, topk: int = 5, out_dirpath=""):
+def global_attr_plot(ctrl: bool, test=False, topk: int = 5, out_dirpath="", on_peaks: bool = True):
     output = defaultdict(list)
     for fname in ATTR_FNAMES:
         with h5py.File(here("data", "results", "interpretability", fname), "r") as f:
             num_samples = 1 if test else len(f["x_input"])
 
-            _global_attr_plot(f, num_samples, output, ctrl=ctrl, topk=topk)
+            _global_attr_plot(f, num_samples, output, ctrl=ctrl, topk=topk, on_peaks=on_peaks)
     if test:
         print(output)
     else:
         np.savez(
-            os.path.join(out_dirpath, f"globl_attr_plot_{ctrl}"),
+            os.path.join(out_dirpath, f"globl_attr_plot_{ctrl}_{on_peaks}"),
             **output,
         )
 
 
-def run_global_attr_plot(out_dirpath=""):
-    global_attr_plot(ctrl=True, out_dirpath=out_dirpath)
-    global_attr_plot(ctrl=False, out_dirpath=out_dirpath)
+def run_global_attr_plot(out_dirpath="", on_peaks=True):
+    global_attr_plot(ctrl=True, out_dirpath=out_dirpath, on_peaks=on_peaks)
+    global_attr_plot(ctrl=False, out_dirpath=out_dirpath, on_peaks=on_peaks)
 
 
 def run_global_stalling(window_size: int = 20, out_dirpath=""):
@@ -303,7 +303,7 @@ def run_global_stalling(window_size: int = 20, out_dirpath=""):
     )
 
 
-def run_topk_attr_condition_wise(wsize: int = 20, out_dirpath=""):
+def run_topk_attr_condition_wise(wsize: int = 20, out_dirpath="", peaks: bool = True):
 
     # Load genetic code
     genetic_code = pd.read_csv(GENCODE_FPATH, index_col=0).set_index("Codon")
@@ -362,9 +362,14 @@ def run_topk_attr_condition_wise(wsize: int = 20, out_dirpath=""):
             depr_true = f[f"y_true_{suffix}"][transc_idx]
             depr_true = np.where(depr_true == 999, np.nan, depr_true)
 
-            good_idxs = np.nonzero(
-                depr_true > np.nanmean(depr_true) + np.nanstd(depr_true)
-            )[0]
+            if peaks:
+                good_idxs = np.nonzero(
+                    depr_true > np.nanmean(depr_true) + np.nanstd(depr_true)
+                )[0]
+            else:
+                good_idxs = np.nonzero(
+                    depr_true < np.nanmean(depr_true) - np.nanstd(depr_true)
+                )[0]
             good_idxs = good_idxs[
                 (good_idxs >= wsize) & (good_idxs < n_codons - wsize - 1)
             ]
@@ -386,8 +391,9 @@ def run_topk_attr_condition_wise(wsize: int = 20, out_dirpath=""):
         cond: {cod: np.mean(w) if len(w) > 0 else 0 for cod, w in cod_wise.items()}
         for cond, cod_wise in condition_attr_depr_head.items()
     }
+    fname = "topk_attr_cond_wise.zip" if peaks else "topk_attr_cond_wise_notpeaks.zip"
     pd.DataFrame(condition_attr_depr_head).to_csv(
-        os.path.join(out_dirpath, "topk_attr_cond_wise.zip")
+        os.path.join(out_dirpath, fname)
     )
 
 
@@ -407,7 +413,8 @@ if __name__ == "__main__":
     output_dirpath = args.output_dirpath or here("data", "results", "plotting")
 
     print("Running global_attr_plot")
-    run_global_attr_plot(out_dirpath=output_dirpath)
+    run_global_attr_plot(out_dirpath=output_dirpath, on_peaks=True)
+    run_global_attr_plot(out_dirpath=output_dirpath, on_peaks=False)
 
     print("Running global_stalling")
     run_global_stalling(window_size=10, out_dirpath=output_dirpath)

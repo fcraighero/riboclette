@@ -17,12 +17,10 @@ def _():
     import numpy as np
     import pandas as pd
     import scienceplots
+    import utils
     from adjustText import adjust_text
     from pyhere import here
     from scipy.stats import pearsonr, spearmanr
-
-    import utils
-
     return (
         adjust_text,
         config,
@@ -81,7 +79,6 @@ def _(np):
             ax.set_xlabel("Codon Distance from A-site")
         if ylabel:
             ax.set_ylabel("Frequency")
-
     return (global_attr_plot,)
 
 
@@ -217,7 +214,6 @@ def _(adjust_text, config, itertools, np, pearsonr):
             c_text = config.CONDITIONS_FIXNAME[condition]
             axs[i].set_title(f"{c_text} (PCC: {corr:.2f})")
             axs[i].tick_params(axis="both", which="major")
-
     return global_stalling, plot_condition
 
 
@@ -264,7 +260,6 @@ def _(config, ma):
         h.render()
 
         return h
-
     return (topk_attributions,)
 
 
@@ -304,10 +299,10 @@ def _(
         sub_gs = gs[0, :2].subgridspec(1, 2, wspace=0.1)
         ax = fig.add_subplot(sub_gs[0, 0])
         ax.text(-0.3, 1.1, "a", transform=ax.transAxes, fontsize=8)
-        ctrl_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_True.npz"))[
+        ctrl_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_True_True.npz"))[
             "CTRL"
         ]
-        dd_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False.npz"))
+        dd_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False_True.npz"))
         global_attr_plot(
             ax, ctrl_data, title="Control", ylabel=True, yticks=True, xticks=True
         )
@@ -499,6 +494,53 @@ def _(mo):
 
 
 @app.cell
+def _(OUT_DIRPATH, PLOTTING_DIRPATH, global_attr_plot, here, np, os, plt):
+    def _():
+        _, axs = plt.subplots(2,2, figsize=(10, 8))
+        axs = np.array(axs).flatten()
+    
+        ctrl_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_True_True.npz"))[
+            "CTRL"
+        ]
+        global_attr_plot(
+            axs[0], ctrl_data, title="Control", ylabel=True, yticks=True, xticks=True
+        )
+        dd_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False_True.npz"))
+        global_attr_plot(
+            axs[1],
+            np.concatenate([dd_data[k] for k in dd_data.keys() if k != "CTRL"]),
+            title="Deprivation Difference",
+            yticks=False,
+            xticks=True,
+        )
+        axs[1].twinx().set_ylabel('A-site = peak', rotation=-90, labelpad=18)
+    
+        ctrl_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_True_False.npz"))[
+            "CTRL"
+        ]
+        global_attr_plot(
+            axs[2], ctrl_data, title="Control", ylabel=True, yticks=True, xticks=True
+        )
+    
+        dd_data = np.load(os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False_False.npz"))
+        global_attr_plot(
+            axs[3],
+            np.concatenate([dd_data[k] for k in dd_data.keys() if k != "CTRL"]),
+            title="Deprivation Difference",
+            yticks=False,
+            xticks=True,
+        )
+        axs[3].twinx().set_ylabel('A-site = fast codon position', rotation=-90, labelpad=18)
+
+        output_dirpath = OUT_DIRPATH or here("data", "results", "figures")
+        output_fpath = os.path.join(output_dirpath, "hist_attr_peak_notpeak.png")
+    
+        plt.savefig(output_fpath, dpi=400, bbox_inches='tight')
+    _()
+    return
+
+
+@app.cell
 def _(mo):
     mo.md(r"""## Attribution vs RPF (supp)""")
     return
@@ -654,7 +696,7 @@ def _(
             constrained_layout=True,
         )
         cond_dd_data = np.load(
-            os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False.npz")
+            os.path.join(PLOTTING_DIRPATH, "globl_attr_plot_False_True.npz")
         )
         cond_iter = config.CONDITIONS_FIXNAME.copy()
         cond_iter.pop("CTRL", None)
