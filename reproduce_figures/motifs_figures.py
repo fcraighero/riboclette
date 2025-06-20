@@ -313,7 +313,7 @@ def _(codon_to_id, config, defaultdict, h5py, here, np):
 
 @app.cell
 def _(count_substring_pattern_matches, extract_windows_across_files):
-    from scipy.stats import fisher_exact, binomtest, poisson_means_test
+    from scipy.stats import fisher_exact
     from statsmodels.stats.multitest import multipletests
 
     def pvalue_to_stars(p):
@@ -333,7 +333,8 @@ def _(count_substring_pattern_matches, extract_windows_across_files):
 
         stattest_dict = {t: [] for t in ['pvalue', 'stats', 'n_hit_peak', 'n_hit_npeak', 'n_miss_peak', 'n_miss_npeak', 'filled_motif_codons']}
         for motif in patterns:
-            stat, pvalue = poisson_means_test(peak_pattern_count[f"hit_{motif}"], peak_pattern_count[f"miss_{motif}"]+peak_pattern_count[f"hit_{motif}"], non_peak_pattern_count[f"hit_{motif}"], non_peak_pattern_count[f"miss_{motif}"]+non_peak_pattern_count[f"hit_{motif}"])
+            res = fisher_exact([[peak_pattern_count[f"hit_{motif}"], peak_pattern_count[f"miss_{motif}"]],[non_peak_pattern_count[f"hit_{motif}"], non_peak_pattern_count[f"miss_{motif}"]]])
+            stat, pvalue = res.statistic, res.pvalue
             stattest_dict['filled_motif_codons'].append(motif)
             stattest_dict['pvalue'].append(pvalue)
             stattest_dict['stats'].append(stat)
@@ -348,14 +349,7 @@ def _(count_substring_pattern_matches, extract_windows_across_files):
         stattest_dict['pvalue_significance'] = [pvalue_to_stars(pc) for pc in pvals_corrected]
 
         return stattest_dict
-    return (
-        binomtest,
-        fisher_exact,
-        get_pvalue_starts,
-        multipletests,
-        poisson_means_test,
-        pvalue_to_stars,
-    )
+    return fisher_exact, get_pvalue_starts, multipletests, pvalue_to_stars
 
 
 @app.cell
