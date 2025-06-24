@@ -390,8 +390,8 @@ def _(agg_filled_motifs_df, config, here, pd, tqdm):
                 df_to_save = (
                     agg_filled_motifs_df.query('condition == @cond')
                     .rename(
-                        columns=dict(filled_motif_codons='motif', n_hit_npeak="n_hit_not_peak", n_miss_npeak="n_miss_not_peak", stats='statistics')
-                    )[['motif', 'n_hit_peak', 'n_miss_peak', 'n_hit_not_peak', 'n_miss_not_peak', 'statistics', 'pvalue', 'pvalue_corrected']]
+                        columns=dict(filled_motif_codons='motif', n_hit_npeak="n_hit_other", n_miss_npeak="n_miss_other", stats='statistics')
+                    )[['motif', 'n_hit_peak', 'n_miss_peak', 'n_hit_other', 'n_miss_other', 'statistics', 'pvalue', 'pvalue_corrected']]
                 .set_index('motif')
                 .sort_values('statistics',ascending=False))
                 df_to_save.to_excel(writer, sheet_name=cond)
