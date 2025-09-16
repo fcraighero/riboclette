@@ -1,3 +1,6 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17100113.svg)](https://doi.org/10.5281/zenodo.17100113)
+
+
 # 🧬🧑🏾‍💻 Riboclette: Conditional Deep Learning Model Reveals Translation Elongation Determinants during Amino Acid Deprivation
 
 Welcome to **Riboclette**, a transformer-based deep learning model for predicting ribosome densities under various nutrient-deprivation conditions. Follow this tutorial to get started! 🚀
