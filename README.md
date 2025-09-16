@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 Download the processed data and the pre-trained model checkpoints from the following link:
 
-[Download Data and Checkpoints]([https://os.unil.cloud.switch.ch/swift/v1/lts2-riboclette/](https://doi.org/10.5281/zenodo.17100113))
+[Download Data and Checkpoints](https://doi.org/10.5281/zenodo.17100113)
 
 Inside `utils` we provided a script to download all the data, saved by default in the working directory.
 
